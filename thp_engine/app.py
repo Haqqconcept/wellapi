@@ -1,0 +1,205 @@
+"""
+app.py  —  THP Surrogate Model Demo
+Streamlit interface for predicting Tubing Head Pressure.
+Run with: streamlit run app.py
+"""
+
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+
+import streamlit as st
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import time
+
+from predict import predict_THP, compare_methods
+from traverse import WellInput, GradientTraverse
+
+# ── Page config ───────────────────────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="THP Predictor",
+    page_icon="🛢️",
+    layout="wide"
+)
+
+st.title("🛢️ Tubing Head Pressure (THP) Predictor")
+st.markdown(
+    "An open-source ML surrogate model for vertical oil well THP estimation. "
+    "Trained on 9,400+ physics-based synthetic cases using the gradient-traverse method "
+    "(Poettmann-Carpenter, Hall-Yarborough z-factor, Standing/Dake PVT correlations)."
+)
+st.divider()
+
+
+# ── Sidebar inputs ────────────────────────────────────────────────────────────
+
+st.sidebar.header("Well Input Parameters")
+st.sidebar.markdown("Adjust parameters then click **Predict**.")
+
+with st.sidebar:
+    st.subheader("Flow Conditions")
+    QL      = st.slider("Liquid Rate QL (STB/day)", 100, 1500, 330, 50)
+    WOR     = st.slider("Water-Oil Ratio (STB/STB)", 0.0, 5.0, 1.5, 0.1)
+    GLR     = st.slider("Gas-Liquid Ratio (scf/STB)", 100, 800, 273, 10)
+    Pwf     = st.slider("Bottom-Hole Flowing Pressure (psia)", 200, 2000, 1000, 50)
+
+    st.subheader("Fluid Properties")
+    API     = st.slider("API Gravity (°API)", 25, 45, 35, 1)
+    oil_sg  = st.slider("Oil Specific Gravity", 0.80, 0.90, 0.85, 0.01)
+    gas_sg  = st.slider("Gas Specific Gravity", 0.65, 0.80, 0.75, 0.01)
+    water_sg = st.slider("Water Specific Gravity", 1.03, 1.07, 1.05, 0.01)
+    Bw      = st.slider("Water FVF (bbl/STB)", 1.00, 1.02, 1.01, 0.01)
+
+    st.subheader("Well Geometry")
+    depth   = st.slider("Well Depth (ft)", 2000, 8000, 5000, 500)
+    d       = st.selectbox("Tubing ID (inches)", [1.995, 2.441, 2.992, 3.476], index=1)
+    T       = st.slider("Avg Wellbore Temperature (°F)", 100, 200, 150, 5)
+
+    predict_btn = st.button("⚡ Predict THP", type="primary", use_container_width=True)
+
+
+# ── Main panel ────────────────────────────────────────────────────────────────
+
+col1, col2 = st.columns([1, 1.6])
+
+with col1:
+    if predict_btn:
+        with st.spinner("Computing..."):
+            # ML prediction
+            t0  = time.perf_counter()
+            ml  = predict_THP(QL, WOR, GLR, oil_sg, water_sg, gas_sg,
+                               T, API, Bw, d, depth, Pwf, method="ml")
+            ml_ms = (time.perf_counter() - t0) * 1000
+
+            # Physics engine
+            t0  = time.perf_counter()
+            phy = predict_THP(QL, WOR, GLR, oil_sg, water_sg, gas_sg,
+                               T, API, Bw, d, depth, Pwf, method="physics")
+            phy_ms = (time.perf_counter() - t0) * 1000
+
+        diff = abs(ml["THP"] - phy["THP"])
+
+        st.subheader("Results")
+        m1, m2 = st.columns(2)
+        m1.metric("🤖 ML Surrogate", f"{ml['THP']} psia",
+                  help="XGBoost prediction — ~0.01 ms")
+        m2.metric("⚙️ Physics Engine", f"{phy['THP']} psia",
+                  help="Gradient-traverse calculation")
+
+        st.metric("Difference", f"{diff:.1f} psia")
+
+        if ml["confidence"] == "high":
+            st.success("✅ Inputs are within training range — high confidence prediction.")
+        elif ml["confidence"] == "medium":
+            st.warning("⚠️ One or two inputs are outside training range — use with caution.")
+        else:
+            st.error("❌ Multiple inputs outside training range — physics engine recommended.")
+
+        speed_ratio = phy_ms / ml_ms if ml_ms > 0 else 0
+        st.info(f"Speed: ML={ml_ms:.2f} ms | Physics={phy_ms:.1f} ms | "
+                f"Surrogate is **{speed_ratio:.0f}×** faster")
+
+        # Derived quantities
+        st.subheader("Derived Well Properties")
+        fw = WOR / (WOR + 1)
+        fo = 1 - fw
+        GOR = GLR * (1 + WOR)
+        M   = 350.376 * (fo * oil_sg + fw * water_sg) + 0.0763 * gas_sg * GLR
+        Dvp = 176.844e-6 * M * QL / d
+
+        dc1, dc2 = st.columns(2)
+        dc1.metric("Water Cut fw", f"{fw:.3f}")
+        dc1.metric("GOR (scf/STB)", f"{GOR:.0f}")
+        dc2.metric("M (lbm/STB)", f"{M:.2f}")
+        dc2.metric("Velocity Number Dvp", f"{Dvp:.3f}")
+
+    else:
+        st.info("👈 Set parameters in the sidebar and click **Predict THP**.")
+        st.markdown("""
+        **About this tool**
+
+        This app demonstrates a data-driven surrogate model for Tubing Head
+        Pressure (THP) prediction in vertical oil wells, built as part of
+        ongoing research in ML-based well performance modelling.
+
+        **How it works:**
+        1. The physics engine implements the Poettmann-Carpenter gradient-traverse
+           method with Hall-Yarborough z-factor and Standing/Dake PVT correlations.
+        2. 9,400+ synthetic well cases were generated by sweeping input parameters
+           across realistic field ranges.
+        3. An XGBoost surrogate model was trained on this dataset (R²=0.9991, MAE=7 psia).
+        4. At prediction time, the surrogate gives an answer 900× faster than
+           the iterative physics calculation.
+
+        **Parameter ranges used in training:**
+        | Parameter | Min | Max |
+        |---|---|---|
+        | Liquid rate | 100 | 1500 STB/day |
+        | WOR | 0.0 | 5.0 |
+        | GLR | 100 | 800 scf/STB |
+        | Well depth | 2000 | 8000 ft |
+        | Pwf | 200 | 2000 psia |
+        """)
+
+
+with col2:
+    if predict_btn:
+        st.subheader("Pressure-Depth Traverse Profile")
+
+        with st.spinner("Building traverse profile..."):
+            well   = WellInput(QL=QL, WOR=WOR, GLR=GLR, oil_sg=oil_sg,
+                               water_sg=water_sg, gas_sg=gas_sg, T=T,
+                               API=API, Bw=Bw, d=d, depth=depth, Pwf=Pwf)
+            engine = GradientTraverse(well)
+            tbl, _ = engine.run()
+
+        fig, axes = plt.subplots(1, 3, figsize=(11, 5))
+        fig.suptitle("Gradient Traverse Profile", fontsize=11, fontweight="bold")
+
+        # Pressure vs depth
+        axes[0].plot(tbl["P_assumed"], tbl["depth_to_top"],
+                     color="#2166ac", linewidth=1.8)
+        axes[0].set_xlabel("Pressure (psia)")
+        axes[0].set_ylabel("Depth from surface (ft)")
+        axes[0].invert_yaxis()
+        axes[0].set_title("Pressure Profile")
+        axes[0].grid(alpha=0.3)
+
+        # Density vs depth
+        axes[1].plot(tbl["Avg_rho"], tbl["depth_to_top"],
+                     color="#1a9641", linewidth=1.8)
+        axes[1].set_xlabel("Avg Mixture Density (lbm/ft³)")
+        axes[1].set_ylabel("Depth from surface (ft)")
+        axes[1].invert_yaxis()
+        axes[1].set_title("Density Profile")
+        axes[1].grid(alpha=0.3)
+
+        # z-factor vs depth
+        axes[2].plot(tbl["z"], tbl["depth_to_top"],
+                     color="#d73027", linewidth=1.8)
+        axes[2].set_xlabel("Gas Compressibility Factor z")
+        axes[2].set_ylabel("Depth from surface (ft)")
+        axes[2].invert_yaxis()
+        axes[2].set_title("z-Factor Profile")
+        axes[2].grid(alpha=0.3)
+
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
+        # Traverse table (expandable)
+        with st.expander("View full traverse table"):
+            st.dataframe(tbl.round(4), use_container_width=True)
+
+
+# ── Footer ────────────────────────────────────────────────────────────────────
+
+st.divider()
+st.caption(
+    "Built with Python · XGBoost · Streamlit | "
+    "Physics: Poettmann-Carpenter gradient traverse | "
+    "PVT: Standing (1947), Dake (1978), Hall-Yarborough (1974) | "
+    "Research project — Federal University of Technology, Minna"
+)
