@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.db
+.env
+thp_engine/__pycache__/
+thp_engine/synthetic_dataset.csv
+thp_engine/full_results.png
+thp_engine/surrogate_validation.png
+thp_engine/tune_and_evaluate.py
+thp_engine/train_model.py 
