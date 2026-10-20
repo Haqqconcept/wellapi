@@ -5,7 +5,7 @@ Pay-per-use REST API for Tubing Head Pressure (THP) prediction in vertical oil w
 ## Quick start (local)
 
 ```bash
-# 1. Install dependencies
+# 1. Install depedencies
 pip install -r requirements.txt
 
 # 2. Copy and fill environment config
@@ -15,8 +15,8 @@ cp .env.example .env
 uvicorn main:app --reload
 ```
 
-API will be live at **http://localhost:8000**
-Interactive docs at **http://localhost:8000/docs**
+API will be live at **http://localhost:8501**
+Interactive docs at **http://localhost:8501.doc**
 
 ---
 
